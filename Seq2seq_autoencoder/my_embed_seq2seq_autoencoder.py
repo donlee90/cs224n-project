@@ -12,12 +12,12 @@ class Config(object): #BK: (object) means that Config class inherits from "objec
 	instantiation.
 	"""
 	seq_length = 10
-	embed_size = 50
+	embed_size = 5
 	batch_size = 50
 	n_tokens = 7
-	n_epochs = 15
-	lr = 1e-4
-	cell_size = 2000
+	n_epochs = 20
+	lr = 1e-3
+	cell_size = 200
 	clip_gradients = False
 	max_grad_norm = 1e3
 
@@ -44,7 +44,7 @@ class Seq2seq_autoencoder(Model): #For my own benefit: (Model) means SoftmaxMode
 		"""
 		### 
 		input_placeholder = tf.placeholder(tf.int32,(None, self.config.seq_length, 1)) 
-		labels_placeholder = tf.placeholder(tf.int32,(None, self.config.seq_length, 1))
+		labels_placeholder = tf.placeholder(tf.int32,(None, self.config.seq_length))
 		self.input_placeholder = input_placeholder
 		self.labels_placeholder = labels_placeholder
 		### 
@@ -87,7 +87,7 @@ class Seq2seq_autoencoder(Model): #For my own benefit: (Model) means SoftmaxMode
 			embeddings: tf.Tensor of shape (None, n_features*embed_size)
 		"""
 		### YOUR CODE HERE
-		embedding_tensor = tf.Variable(self.pretrained_embeddings) #BK: pretrained_embeddings is has shape (n_tokens, embed_size)
+		embedding_tensor = tf.Variable(tf.cast(self.pretrained_embeddings,tf.float32),dtype=tf.float32) #BK: pretrained_embeddings is has shape (n_tokens, embed_size)
 		embeddings = tf.nn.embedding_lookup(embedding_tensor, self.input_placeholder) # tensor of shape (None, seq_length, 1 , embed_size)
 		embeddings = tf.reshape(embeddings, (-1, self.config.seq_length, self.config.embed_size)) # tensor of shpae (None, seq_length, embed_size)
 		### END YOUR CODE
@@ -108,16 +108,21 @@ class Seq2seq_autoencoder(Model): #For my own benefit: (Model) means SoftmaxMode
 		dec_cell = tf.nn.rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
 
 		#Creates a decoder input, for which we append the zero vector at the beginning of each sequence, which serves as the "GO" token.
-		unpacked_enc_input = tf.unpack(enc_input, axis=1)
+		unpacked_enc_input = tf.unstack(enc_input, axis=1)
 		unpacked_dec_input = [tf.zeros_like(unpacked_enc_input[0])] + unpacked_enc_input[:-1]
-		dec_input = tf.pack(unpacked_dec_input, axis=1)
+		dec_input = tf.stack(unpacked_dec_input, axis=1)
 		
 		with tf.variable_scope("decoder"):
 			dec_output, _ = tf.nn.dynamic_rnn(dec_cell, dec_input, None, enc_state)	
-		pred = dec_output #temp(03/05/17): currently, its shape is (None, seq_length, embed_size). We need to turn it into (None, seq_length, n_tokens). Perhaps need to use softmax and cross entropy.
-		un_embedding_tensor = tf.cast(tf.Variable(tf.transpose(self.pretrained_embeddings)), tf.float32) # transpose of embedding_tensor of shape (embed_size, n_tokens). This is initialized the same way as embedding_tensor, but they are seperate variables.
-		pred_bias = tf.Variable(tf.zeros((self.config.seq_length, self.config.n_tokens)))
-		pred = tf.matmul(pred, un_embedding_tensor) + pred_bias # (None, seq_length, n_tokens). 
+
+		embed_pred = dec_output #(None, seq_length, embed_size).
+		embed_pred = tf.reshape(embed_pred, (-1, self.config.embed_size)) # (None*seq_length, embed_size)
+		# transpose of embedding_tensor of shape (embed_size, n_tokens). This is initialized the same way as embedding_tensor, but they are seperate variables.
+		un_embedding_tensor = tf.Variable(tf.cast(tf.transpose(self.pretrained_embeddings),dtype=tf.float32),dtype=tf.float32)
+		pred_bias = tf.Variable(tf.zeros((self.config.seq_length, self.config.n_tokens)), dtype=tf.float32)
+		pred = tf.matmul(embed_pred, un_embedding_tensor) # (None*seq_length, n_tokens)
+		pred = tf.reshape(pred, (-1, self.config.seq_length, self.config.n_tokens)) # (None, seq_length, n_tokens)
+		pred = pred + pred_bias
 
 		return pred # This is logits for each token.
 
@@ -126,8 +131,8 @@ class Seq2seq_autoencoder(Model): #For my own benefit: (Model) means SoftmaxMode
 
 		"""
 		### 
-		pred = tf.reshape(pred, (-1, self.seq_length, 1, self.n_tokens))
-		loss = tf.nn.sparse_softmax_cross_entropy_with_logits(self.labels_placeholder, pred)
+		loss = tf.nn.sparse_softmax_cross_entropy_with_logits(pred, self.labels_placeholder) # labels = (None, seq_length), and pred = (None, seq_length, n_tokens)
+		loss = tf.reduce_mean(loss)
 		### 
 		return loss
 
@@ -195,11 +200,11 @@ class Seq2seq_autoencoder(Model): #For my own benefit: (Model) means SoftmaxMode
 		self.config = config
 		self.build()
 
-def generate_sequence_data(n_tokens, train_size, seq_length, vector_size):
+def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
 	"""Each element is drawn from i.i.d Gaussians.
 	Note that train_size, the size of the entire training set, is in general different from and much larger than batch_size, which refers to the size of minibatches.
 	"""
-	return np.random.randint(n_tokens, size=(train_size, seq_length, vector_size))
+	return np.random.randint(n_tokens, size=(train_size, seq_length, n_features))
 
 def do_seq2seq_prediction():
 	config = Config()
@@ -208,8 +213,8 @@ def do_seq2seq_prediction():
 	pretrained_embeddings = np.random.randn(n_tokens, embed_size) #temp: later this, together with n_tokens and embed_size, has to be replaced with real word2vec.
 	#Generate a training data
 	np.random.seed(0)
-	inputs = generate_sequence_data(n_tokens, 10*config.batch_size, config.seq_length, 1)
-	labels = inputs
+	inputs = generate_sequence_data(n_tokens, 100*config.batch_size, config.seq_length)
+	labels = np.reshape(inputs, (100*config.batch_size, config.seq_length))
 	#Create and train a seq2seq autoencoder
 	with tf.Graph().as_default():
 		model = Seq2seq_autoencoder(config, pretrained_embeddings)
