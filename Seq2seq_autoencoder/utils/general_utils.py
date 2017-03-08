@@ -5,7 +5,7 @@ import numpy as np
 
 def get_minibatches(data, minibatch_size, shuffle=True):
     """
-    Iterates through the provided data one minibatch at at time. You can use this function to
+    Iterates through the provided data one minibatch at a time. You can use this function to
     iterate through data in minibatches as follows:
 
         for inputs_minibatch in get_minibatches(inputs, minibatch_size):
@@ -31,7 +31,7 @@ def get_minibatches(data, minibatch_size, shuffle=True):
 
     """
     list_data = type(data) is list and (type(data[0]) is list or type(data[0]) is np.ndarray)
-    data_size = len(data[0]) if list_data else len(data) #For my own benefit: data_size means the number of training examples, or the number of rows of the data matrix.
+    data_size = len(data[0]) if list_data else len(data) #BK: If list_data is true, we assume that it is of the form [inputs, labels]. Therefore, data_size or len(data[0]) means the number of training examples, or the number of rows of the data matrix.
     indices = np.arange(data_size)
     if shuffle:
         np.random.shuffle(indices)
@@ -44,6 +44,10 @@ def get_minibatches(data, minibatch_size, shuffle=True):
 def minibatch(data, minibatch_idx):
     return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
 
+def minibatches(data, batch_size, shuffle=True): 
+    #data is a list of tuples like (input, label, mask). input/label/mask can be themselves a list.
+    batches = [np.array(col) for col in zip(*data)]
+    return get_minibatches(batches, batch_size, shuffle)
 
 def test_all_close(name, actual, expected):
     if actual.shape != expected.shape:

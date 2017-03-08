@@ -76,7 +76,7 @@ class Model(object):
 
         raise NotImplementedError("Each Model must re-implement this method.")
 
-    def train_on_batch(self, sess, inputs_batch, labels_batch):
+    def train_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
         """Perform one step of gradient descent on the provided batch of data.
 
         Args:
@@ -86,11 +86,11 @@ class Model(object):
         Returns:
             loss: loss over the batch (a scalar)
         """
-        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch)
+        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch, mask_batch=mask_batch)
         _, loss = sess.run([self.train_op, self.loss], feed_dict=feed)
         return loss
 
-    def loss_on_batch(self, sess, inputs_batch, labels_batch): #BK: this is my own.
+    def loss_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
         """Perform one step of gradient descent on the provided batch of data.
 
         Args:
@@ -100,7 +100,7 @@ class Model(object):
         Returns:
             loss: loss over the batch (a scalar)
         """
-        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch)
+        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch, mask_batch=mask_batch)
         loss = sess.run(self.loss, feed_dict=feed)
         return loss
 

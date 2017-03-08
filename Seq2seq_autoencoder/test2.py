@@ -9,6 +9,8 @@ class Config:
     """
 
 if __name__ == "__main__":
+    sess = tf.InteractiveSession()
+
     # config = Config()
     # config.a = None
     # print config.a
@@ -38,9 +40,56 @@ if __name__ == "__main__":
     # idx = tf.constant([[[0],[1]],[[1],[0]]])
     # with tf.Session() as sess:
     #     print tf.nn.embedding_lookup(embedding, idx).eval()
-    a = np.random.randn(3, 2)
-    b = tf.Variable(a)
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        print b.eval()
-        print sess.run(b)
+    # a = np.random.randn(3, 2)
+    # b = tf.Variable(a)
+    # with tf.Session() as sess:
+    #     sess.run(tf.global_variables_initializer())
+    #     print b.eval()
+    #     print sess.run(b)
+
+    # a = tf.constant(np.arange(1,13), shape=[2, 2, 3], dtype=tf.int32)
+    # b = tf.constant(np.arange(13,25), shape=[2, 3, 2], dtype=tf.int32)
+    # c = tf.matmul(a, b)
+    # with tf.Session() as sess:
+    #     print c.eval()
+
+    # a = tf.placeholder(tf.float32, (None, 3, 2))
+    # b = tf.placeholder(tf.float32, (None, 2,4))
+    # c = tf.matmul(a,b)
+
+    # print c
+
+    # a = tf.constant([[1,0],[0,1]])
+    # b = tf.tile(a, [None,1])
+    # print a
+    # print b
+
+    # a = tf.constant([[[1],[2]],[[3],[4]]]) # (2,2,1)
+    # b = tf.reshape(a, (-1,1))
+    # print b.eval()
+
+    # a = tf.range(12)
+    # a = tf.reshape(a , (-1,4))
+    # print a.eval()
+
+    # b = tf.range(24)
+    # b = tf.reshape(b, (12,2))
+    # print b.eval()
+    # b = tf.reshape(b, (-1,4,2))
+    # print b.eval()
+
+    params = tf.constant([[10,0.1],[20,0.2],[30,0.3],[40,0.4]])
+    ids = tf.constant([[1,1],[3,3]])
+    print tf.nn.embedding_lookup(params,ids).eval()
+
+    sess.close()
+
+    # data = [(1,2,3),(4,5,6)]
+    # batches = [np.array(col) for col in zip(*data)]
+    # print zip(data)
+    # print zip((1,2,3),(4,5,6))
+    # print zip(*data)
+    # print batches
+
+    # a = np.array([[1,2],[3,4],[5,6]])
+    # print a[[0,2]]
