@@ -109,7 +109,7 @@ def normalize(word):
     """
     Normalize words that are numbers or have casing.
     """
-    if word.isdigit(): return NUM
+    if word.isdigit(): return _NUM
     else: return word.lower()
 
 class ModelHelper(object):
