@@ -7,6 +7,9 @@ from tensorflow.python.platform import gfile
 from collections import Counter, OrderedDict
 import numpy as np
 
+# Size of embedding vector
+EMBED_SIZE = 50
+
 # Special vocabulary symbols - we always put them at the start.
 _PAD = b"_PAD"
 _GO = b"_GO"
@@ -20,7 +23,6 @@ _WORD_SPLIT = re.compile(b"([.,!?\"':;)(])")
 _DIGIT_RE = re.compile(br"\d")
 
 
-
 def basic_tokenizer(sentence):
   """Very basic tokenizer: split the sentence into a list of tokens."""
   words = []
@@ -31,79 +33,6 @@ def basic_tokenizer(sentence):
         word = space_separated_fragment  
     words.extend(re.split(_WORD_SPLIT, word))
   return [w for w in words if w]
-
-
-def create_vocabulary(vocabulary_path, data_path, max_vocabulary_size,
-                      tokenizer=None, normalize_digits=True):
-    
-  if not gfile.Exists(vocabulary_path):
-    print("Creating vocabulary %s from %s" % (vocabulary_path, data_path))
-    vocab = {}
-    with gfile.GFile(data_path, mode="rb") as f:
-      counter = 0
-      for line in f:
-        counter += 1
-        if counter % 100000 == 0:
-          print("  processing line %d" % counter)
-        tokens = tokenizer(line) if tokenizer else basic_tokenizer(line)
-        for w in tokens:
-          word = re.sub(_DIGIT_RE, b"0", w) if normalize_digits else w
-          if word in vocab:
-            vocab[word] += 1
-          else:
-            vocab[word] = 1
-      vocab_list = _START_VOCAB + sorted(vocab, key=vocab.get, reverse=True)
-      print('>> Full Vocabulary Size :',len(vocab_list))
-      if len(vocab_list) > max_vocabulary_size:
-        vocab_list = vocab_list[:max_vocabulary_size]
-      with gfile.GFile(vocabulary_path, mode="wb") as vocab_file:
-        for w in vocab_list:
-          vocab_file.write(w + b"\n")
-
-
-def initialize_vocabulary(vocabulary_path):
-
-  if gfile.Exists(vocabulary_path):
-    rev_vocab = []
-    with gfile.GFile(vocabulary_path, mode="rb") as f:
-      rev_vocab.extend(f.readlines())
-    rev_vocab = [line.strip() for line in rev_vocab]
-    vocab = dict([(x, y) for (y, x) in enumerate(rev_vocab)])
-    return vocab, rev_vocab
-  else:
-    raise ValueError("Vocabulary file %s not found.", vocabulary_path)
-
-
-def sentence_to_token_ids(sentence, vocabulary, tokenizer=None, normalize_digits=True):
-
-  if tokenizer:
-    words = tokenizer(sentence)
-  else:
-    words = basic_tokenizer(sentence)
-  if not normalize_digits:
-    return [vocabulary.get(w, UNK_ID) for w in words]
-  # Normalize digits by 0 before looking words up in the vocabulary.
-  return [vocabulary.get(re.sub(_DIGIT_RE, b"0", w), UNK_ID) for w in words]
-
-
-def data_to_token_ids(data_path, target_path, vocabulary_path,
-                      tokenizer=None, normalize_digits=True):
-
-  if not gfile.Exists(target_path):
-    print("Tokenizing data in %s" % data_path)
-    vocab, _ = initialize_vocabulary(vocabulary_path)
-    with gfile.GFile(data_path, mode="rb") as data_file:
-      with gfile.GFile(target_path, mode="w") as tokens_file:
-        counter = 0
-        for line in data_file:
-          counter += 1
-          if counter % 100000 == 0:
-            print("  tokenizing line %d" % counter)
-          token_ids = sentence_to_token_ids(line, vocab, tokenizer,
-                                            normalize_digits)
-          tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
-
-######################################################################
 
 def normalize(word):
     """
@@ -178,17 +107,15 @@ def load_word_vector_mapping(vocab_fstream, vector_fstream):
     """
     ret = OrderedDict()
     for vocab, vector in zip(vocab_fstream, vector_fstream):
-        print vocab, vector
         vocab = vocab.strip()
         vector = vector.strip()
         ret[vocab] = np.array(list(map(float, vector.split())))
 
     return ret
 
-EMBED_SIZE = 10
 def load_embeddings(vocab_path, vectors_path, helper):
     print "Loading training data..."
-    embeddings = np.array(np.random.randn(len(helper.tok2id), EMBED_SIZE),
+    embeddings = np.array(np.random.randn(len(helper.tok2id) + 1, EMBED_SIZE),
                           dtype=np.float32)
     with open(vocab_path) as vocab, open(vectors_path) as vectors:
         for word, vec in load_word_vector_mapping(vocab, vectors).items():
