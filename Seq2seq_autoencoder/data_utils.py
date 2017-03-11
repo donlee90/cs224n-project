@@ -1,0 +1,127 @@
+"""Utilities for downloading data from WMT, tokenizing, vocabularies."""
+
+import os
+import re
+
+from tensorflow.python.platform import gfile
+from collections import Counter, OrderedDict
+import numpy as np
+
+# Size of embedding vector
+EMBED_SIZE = 50
+
+# Special vocabulary symbols - we always put them at the start.
+_PAD = b"_PAD"
+_GO = b"_GO"
+_EOS = b"_EOS"
+_UNK = b"_UNK"
+_NUM = b"_NUM"
+_START_VOCAB = [_PAD, _GO, _EOS, _UNK, _NUM]
+
+# Regular expressions used to tokenize.
+_WORD_SPLIT = re.compile(b"([.,!?\"':;)(])")
+_DIGIT_RE = re.compile(br"\d")
+
+
+def basic_tokenizer(sentence):
+  """Very basic tokenizer: split the sentence into a list of tokens."""
+  words = []
+  for space_separated_fragment in sentence.strip().split():
+    if isinstance(space_separated_fragment, str):
+        word = str.encode(space_separated_fragment)
+    else:
+        word = space_separated_fragment  
+    words.extend(re.split(_WORD_SPLIT, word))
+  return [w for w in words if w]
+
+def normalize(word):
+    """
+    Normalize words that are numbers or have casing.
+    """
+    if word.isdigit(): return _NUM
+    else: return word.lower()
+
+class ModelHelper(object):
+    def __init__(self, tok2id, id2tok, max_length):
+        self.tok2id = tok2id
+        self.id2tok = id2tok
+        self.max_length = max_length
+
+    def vectorize_example(self, sentence):
+        sentence_ = [self.tok2id.get(normalize(word))\
+                    for word in basic_tokenizer(sentence)]
+        return sentence_
+
+    def vectorize(self, data_path):
+        with open(data_path) as f:
+            return [self.vectorize_example(line) for line in f]
+
+    @classmethod
+    def build(cls, data_path):
+        # Preprocess data to construct an embedding
+        with open(data_path) as f:
+            # Initialize dict with special tokens
+            tok2id = build_dict(_START_VOCAB)
+
+            # Populate dict with words in the data
+            words = [normalize(word) for line in f for word in basic_tokenizer(line)]
+            tok2id.update(build_dict(words, offset=len(tok2id)))
+
+            # Build mapping from id to token (for decoder output)
+            id2tok = {token_id: word for (word, token_id) in tok2id.items()}
+
+        with open(data_path) as f:
+            max_length = max([len(basic_tokenizer(line)) for line in f])
+
+        print "Built dictionary for %d tokens." % (len(tok2id))
+        print "Max sequence length: %d" % (max_length)
+
+        return cls(tok2id, id2tok, max_length)
+
+
+def build_dict(words, max_words=None, offset=0):
+    cnt = Counter(words)
+    if max_words:
+        words = cnt.most_common(max_words)
+    else:
+        words = cnt.most_common()
+    return {word: offset+i for i, (word, _) in enumerate(words)}
+
+
+def load_and_preprocess_data(data_path):
+    # Build tok2id and id2tok mapping
+    print "Loading training data..."
+    helper = ModelHelper.build(data_path)
+
+    # Process all the input data
+    # Convert all the sentences into sequences of token ids
+    data = helper.vectorize(data_path)
+
+    return helper, data
+
+def load_word_vector_mapping(vocab_fstream, vector_fstream):
+    """
+    Load word vector mapping using @vocab_fstream, @vector_fstream.
+    Assumes each line of the vocab file matches with those of the vector
+    file.
+    """
+    ret = OrderedDict()
+    for vocab, vector in zip(vocab_fstream, vector_fstream):
+        vocab = vocab.strip()
+        vector = vector.strip()
+        ret[vocab] = np.array(list(map(float, vector.split())))
+
+    return ret
+
+def load_embeddings(vocab_path, vectors_path, helper):
+    print "Loading training data..."
+    embeddings = np.array(np.random.randn(len(helper.tok2id) + 1, EMBED_SIZE),
+                          dtype=np.float32)
+    with open(vocab_path) as vocab, open(vectors_path) as vectors:
+        for word, vec in load_word_vector_mapping(vocab, vectors).items():
+            word = normalize(word)
+            if word in helper.tok2id:
+                embeddings[helper.tok2id[word]] = vec
+    print "Initialized Embeddings."
+
+    return embeddings
