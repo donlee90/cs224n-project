@@ -24,6 +24,8 @@ class Config(object):
     clip_gradients = False
     max_grad_norm = 1e3
     padding_int = 0
+    sampling = True
+    n_sampled = 1000
 
 
 class Seq2seq_autoencoder(Model):
@@ -188,13 +190,21 @@ class Seq2seq_autoencoder(Model):
             dec_output, _ = tf.nn.dynamic_rnn(dec_cell, dec_input, None, enc_state) 
 
         embed_pred = dec_output #(None, max_length, embed_size).
-        embed_pred = tf.reshape(embed_pred, (-1, self.config.embed_size)) # (None*max_length, embed_size)
-        # transpose of embedding_tensor of shape (embed_size, n_tokens). This is initialized the same way as embedding_tensor, but they are seperate variables.
-        un_embedding_tensor = tf.Variable(tf.transpose(self.pretrained_embeddings),dtype=tf.float32)
-        pred_bias = tf.Variable(tf.zeros((self.config.max_length, self.config.n_tokens)), dtype=tf.float32)
-        pred = tf.matmul(embed_pred, un_embedding_tensor) # (None*max_length, n_tokens)
-        pred = tf.reshape(pred, (-1, self.config.max_length, self.config.n_tokens)) # (None, seq_length, n_tokens)
-        pred = pred + pred_bias
+        if self.config.sampling:
+            pred = embed_pred #(None, max_length, embed_size).
+        else:
+            # embed_pred: (None*max_length, embed_size)
+            embed_pred = tf.reshape(embed_pred, (-1, self.config.embed_size))
+
+            # transpose of embedding_tensor of shape (embed_size, n_tokens).
+            # This is initialized the same way as embedding_tensor, but they are seperate variables.
+            un_embedding_tensor = tf.Variable(tf.transpose(self.pretrained_embeddings),dtype=tf.float32)
+            pred_bias = tf.Variable(tf.zeros((self.config.max_length, self.config.n_tokens)), dtype=tf.float32)
+            # pred: (None*max_length, n_tokens)
+            pred = tf.matmul(embed_pred, un_embedding_tensor)
+            # reshape pred to (None, seq_length, n_tokens)
+            pred = tf.reshape(pred, (-1, self.config.max_length, self.config.n_tokens))
+            pred = pred + pred_bias
 
         return pred # This is logits for each token.
 
@@ -209,6 +219,25 @@ class Seq2seq_autoencoder(Model):
         loss = tf.reduce_mean(loss)
         ### 
         return loss
+
+    def add_sampled_loss_op(self, pred):
+        # pred has shape (None, max_length, embed_size).
+        # unstacked_pred is a list of (None, embed_size) tensors.
+        unstacked_pred = tf.unstack(pred, axis=1)
+        labels = self.labels_placeholder # (None, max_length)
+        unstacked_labels = tf.unstack(labels, axis=1) # a list of (None) tensors.
+        proj_embedding_tensor = tf.Variable(self.pretrained_embeddings) # This is a tensor of (n_tokens, embed_size), used to project a embedding space vector on vocabulary space. 
+        pred_bias = tf.Variable(tf.zeros((self.config.n_tokens,)))
+        loss = []
+        for each_pred, each_label in zip(unstacked_pred, unstacked_labels):
+            each_label = tf.reshape(each_label, (-1,1)) # b/c sampled_softmax_loss demands labels of shape (None, 1). Also, no need to cast into tf.int64, since sampled_softmax_loss does it internally.
+            each_loss = tf.nn.sampled_softmax_loss(proj_embedding_tensor, pred_bias, each_pred, each_label, self.config.n_sampled, self.config.n_tokens) # a tensor of shape (None). # Important: this ordering of each_pred, each_label is correct. The website documentation is wrong!
+            loss.append(each_loss)
+        loss = tf.stack(loss, axis=1) # (None, max_length)
+        loss =tf.boolean_mask(loss, self.mask_placeholder) # recall that mask is a (None, max_length)-shaped tensor.
+        loss = tf.reduce_mean(loss)
+        return loss 
+    
 
     def add_training_op(self, loss):
         """Sets up the training Ops.
