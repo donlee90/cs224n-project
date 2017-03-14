@@ -2,8 +2,8 @@
 
 import os
 import re
+import pickle
 
-from tensorflow.python.platform import gfile
 from collections import Counter, OrderedDict
 import numpy as np
 
@@ -78,6 +78,23 @@ class ModelHelper(object):
 
         return cls(tok2id, id2tok, max_length)
 
+    def save(self, path):
+        # Make sure the directory exists.
+        if not os.path.exists(path):
+            os.makedirs(path)
+        # Save the tok2id/id2tok map.
+        with open(os.path.join(path, "features.pkl"), "w") as f:
+            pickle.dump([self.tok2id, self.id2tok, self.max_length], f)
+
+    @classmethod
+    def load(cls, path):
+        # Make sure the directory exists.
+        assert os.path.exists(path) and os.path.exists(os.path.join(path, "features.pkl"))
+        # Load the tok2id/id2tok map.
+        with open(os.path.join(path, "features.pkl")) as f:
+            tok2id, id2tok, max_length = pickle.load(f)
+        return cls(tok2id, id2tok, max_length)
+
 
 def build_dict(words, max_words=None, offset=0):
     cnt = Counter(words)
@@ -114,7 +131,6 @@ def load_word_vector_mapping(vocab_fstream, vector_fstream):
     return ret
 
 def load_embeddings(vocab_path, vectors_path, helper):
-    print "Loading training data..."
     embeddings = np.array(np.random.randn(len(helper.tok2id) + 1, EMBED_SIZE),
                           dtype=np.float32)
     with open(vocab_path) as vocab, open(vectors_path) as vectors:

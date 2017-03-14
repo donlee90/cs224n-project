@@ -18,14 +18,17 @@ class Config(object):
     embed_size = 50
     batch_size = 50
     n_tokens = 7
-    n_epochs = 1000
+    n_epochs = 5000
     lr = 1e-3
     cell_size = 200
     clip_gradients = False
     max_grad_norm = 1e3
     padding_int = 0
-    sampling = True
+    sampling = False
     n_sampled = 1000
+
+    model_path = "results/"
+    model_output = model_path + "model.weights"
 
 
 class Seq2seq_autoencoder(Model):
@@ -288,21 +291,27 @@ class Seq2seq_autoencoder(Model):
             # That is, batches = [input_batch, labels_batch, mask_batch].
         return total_loss / n_minibatches
 
-    def fit(self, sess, train_examples_raw):
+    def fit(self, sess, saver, train_examples_raw):
         """Fit model on provided data.
 
         """
+        # train_examples_raw means unpadded data, which is a list of (sentence, labels) tuples.
+        # The length of sentence and labels vary within the list.
+        # Sentence and labels are themselves a list of integers representing tokens.
+        train_examples = self.preprocess_sequence_data(train_examples_raw)
+
         losses = []
         for epoch in range(self.config.n_epochs):
             start_time = time.time()
-            # train_examples_raw means unpadded data, which is a list of (sentence, labels) tuples.
-            # The length of sentence and labels vary within the list.
-            # Sentence and labels are themselves a list of integers representing tokens.
-            train_examples = self.preprocess_sequence_data(train_examples_raw)
             average_loss = self.run_epoch(sess, train_examples)
             duration = time.time() - start_time
             print 'Epoch {:}: loss = {:.2f} ({:.3f} sec)'.format(epoch+1, average_loss, duration)
             losses.append(average_loss)
+
+            if saver and (epoch % 100 == 0):
+                print 'Saving model weights...'
+                saver.save(sess, self.config.model_output)
+
         return losses
 
     def __init__(self, helper, config, pretrained_embeddings):
@@ -319,7 +328,8 @@ class Seq2seq_autoencoder(Model):
 
 def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
     """Each element is drawn from i.i.d Gaussians.
-    Note that train_size, the size of the entire training set, is in general different from and much larger than batch_size, which refers to the size of minibatches.
+    Note that train_size, the size of the entire training set, is in general
+    different from and much larger than batch_size, which refers to the size of minibatches.
     """
     return np.random.randint(n_tokens, size=(train_size, seq_length, n_features))
 
@@ -337,14 +347,19 @@ def do_seq2seq_prediction():
     embeddings = load_embeddings('data/vocab.txt', 'data/wordVectors.txt', helper)
     config.n_tokens = embeddings.shape[0]
     config.embed_size = embeddings.shape[1]
+    helper.save(config.model_path)
 
     #Create and train a seq2seq autoencoder
     with tf.Graph().as_default():
+        print "Building model..."
         model = Seq2seq_autoencoder(helper, config, embeddings)
+
         init = tf.global_variables_initializer()
+        saver = tf.train.Saver()
+
         with tf.Session() as sess:
             sess.run(init)
-            model.fit(sess, train_examples_raw)
+            model.fit(sess, saver, train_examples_raw)
 
 if __name__ == "__main__":
     do_seq2seq_prediction()
