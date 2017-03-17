@@ -570,7 +570,7 @@ class OutputProjectionWrapper(RNNCell):
   if needed or directly feed into a softmax.
   """
 
-  def __init__(self, cell, output_size):
+  def __init__(self, cell, output_size, dropout_rate=1):
     """Create a cell with output projection.
 
     Args:
@@ -587,6 +587,7 @@ class OutputProjectionWrapper(RNNCell):
       raise ValueError("Parameter output_size must be > 0: %d." % output_size)
     self._cell = cell
     self._output_size = output_size
+    self._dropout_rate = dropout_rate
 
   @property
   def state_size(self):
@@ -601,7 +602,7 @@ class OutputProjectionWrapper(RNNCell):
     output, res_state = self._cell(inputs, state)
     # Default scope: "OutputProjectionWrapper"
     with vs.variable_scope(scope or type(self).__name__):
-      projected = _linear(output, self._output_size, True)
+      projected = _linear(tf.nn.dropout(output, self._dropout_rate), self._output_size, True)
     return projected, res_state
 
 

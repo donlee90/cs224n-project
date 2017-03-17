@@ -29,6 +29,8 @@ class Config(object):
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
     cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
     activation_choice = "relu" #This must be either "relu" or "tanh". 
+    enc_dropout = 0.5
+    dec_dropout = 0.5
 
     clip_gradients = True
     max_grad_norm = 1e3
@@ -131,12 +133,17 @@ class Seq2seq_autoencoder(Model):
         input_placeholder = tf.placeholder(tf.int32,(None, self.config.max_length))
         labels_placeholder = tf.placeholder(tf.int32,(None, self.config.max_length))
         mask_placeholder =  tf.placeholder(tf.bool,(None,self.config.max_length))
+        enc_dropout_placeholder = tf.placeholder(tf.float32, ())
+        dec_dropout_placeholder = tf.placeholder(tf.float32, ())
         self.input_placeholder = input_placeholder
         self.labels_placeholder = labels_placeholder
         self.mask_placeholder = mask_placeholder
+        self.enc_dropout_placeholder = enc_dropout_placeholder
+        self.dec_dropout_placeholder = dec_dropout_placeholder
+
         ### 
 
-    def create_feed_dict(self, inputs_batch, labels_batch=None, mask_batch=None):
+    def create_feed_dict(self, inputs_batch, labels_batch=None, mask_batch=None, enc_dropout=1, dec_dropout=1):
         """Creates the feed_dict for training the given step.
 
         A feed_dict takes the form of:
@@ -152,7 +159,10 @@ class Seq2seq_autoencoder(Model):
             feed_dict: The feed dictionary mapping from placeholders to values.
         """
         ### 
-        feed_dict = {self.input_placeholder: inputs_batch, self.mask_placeholder: mask_batch}
+        feed_dict = {self.input_placeholder: inputs_batch,
+                     self.mask_placeholder: mask_batch,
+                     self.enc_dropout_placeholder: enc_dropout, 
+                     self.dec_dropout_placeholder: dec_dropout}
 
         if labels_batch is not None:
             feed_dict[self.labels_placeholder] = labels_batch
@@ -191,6 +201,9 @@ class Seq2seq_autoencoder(Model):
 
 
         """
+        enc_dropout_rate = self.enc_dropout_placeholder
+        dec_dropout_rate = self.dec_dropout_placeholder
+
         if self.config.activation_choice == "relu":
             activation = tf.nn.relu
         else:
@@ -198,15 +211,15 @@ class Seq2seq_autoencoder(Model):
         if self.config.cell_type == "rnn":
             enc_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
             dec_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
         elif self.config.cell_type == "gru":
             enc_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
             dec_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
         elif self.config.cell_type == "lstm":
             enc_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
             dec_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)                        
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)                        
 
         enc_input = self.add_embedding() # (None, max_length, embed_size)
         with tf.variable_scope("encoder"):
@@ -218,6 +231,9 @@ class Seq2seq_autoencoder(Model):
         unpacked_enc_input = tf.unstack(enc_input, axis=1)
         unpacked_dec_input = [tf.zeros_like(unpacked_enc_input[0])] + unpacked_enc_input[:-1]
         dec_input = tf.stack(unpacked_dec_input, axis=1)
+
+        #Create a drop-out enc_state, which is later fed into the decoder.
+        enc_state = tf.nn.dropout(enc_state, enc_dropout_rate)
         
         with tf.variable_scope("decoder"):
             dec_output, _ = my_rnn.dynamic_rnn(dec_cell, dec_input, None, enc_state) 
