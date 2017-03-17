@@ -1,9 +1,14 @@
+import argparse
+from datetime import datetime
+
 import tensorflow as tf
 import numpy as np
 from model import Model
 import time
 from utils.general_utils import minibatches
 from data_utils import load_and_preprocess_data, load_embeddings
+import my_rnn_cell
+import my_rnn
 
 class Config(object):
 # BK: (object) means that Config class inherits from "object" class,
@@ -16,19 +21,30 @@ class Config(object):
     """
     max_length = 10 # max_length
     embed_size = 50
-    batch_size = 50
+    batch_size = 20
     n_tokens = 7
     n_epochs = 5000
     lr = 1e-3
-    cell_size = 200
-    clip_gradients = False
+    cell_size = None
+    cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
+    cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
+    activation_choice = "relu" #This must be either "relu" or "tanh". 
+
+    clip_gradients = True
     max_grad_norm = 1e3
     padding_int = 0
     sampling = False
     n_sampled = 1000
 
-    model_path = "results/"
-    model_output = model_path + "model.weights"
+    def __init__(self, args):
+        self.cell = args.cell
+
+        if "model_path" in args:
+            self.model_path = args.model_path
+        else:
+            self.model_path = "results/{}/{:%Y%m%d_%H%M%S}/".format(self.cell, datetime.now())
+
+        self.model_output = self.model_path + "model.weights"
 
 
 class Seq2seq_autoencoder(Model):
@@ -175,14 +191,28 @@ class Seq2seq_autoencoder(Model):
 
 
         """
-        #temp: can use different types of rnn
-        enc_cell = tf.nn.rnn_cell.BasicRNNCell(self.config.cell_size)
+        if self.config.activation_choice == "relu":
+            activation = tf.nn.relu
+        else:
+            activation = tf.nn.tanh
+        if self.config.cell_type == "rnn":
+            enc_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
+        elif self.config.cell_type == "gru":
+            enc_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
+        elif self.config.cell_type == "lstm":
+            enc_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)                        
+
         enc_input = self.add_embedding() # (None, max_length, embed_size)
         with tf.variable_scope("encoder"):
-            _, enc_state = tf.nn.dynamic_rnn(enc_cell, enc_input, None, initial_state=tf.zeros((tf.shape(enc_input)[0], enc_cell.state_size),tf.float32)) #None represents the argument 'sequence_length', which is a tensor of shape [batch_size], which specifies the length of the sequence for each element of the batch. The fourth arg is initial state.
-
-        dec_cell = tf.nn.rnn_cell.BasicRNNCell(self.config.cell_size) #temp: can use different types of rnn
-        dec_cell = tf.nn.rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size)
+            """None represents the argument 'sequence_length', which is a tensor of shape [batch_size], which specifies the length of the sequence 
+            for each element of the batch. The fourth arg is initial state."""
+            _, enc_state = my_rnn.dynamic_rnn(enc_cell, enc_input, None, dtype=tf.float32)
 
         #Creates a decoder input, for which we append the zero vector at the beginning of each sequence, which serves as the "GO" token.
         unpacked_enc_input = tf.unstack(enc_input, axis=1)
@@ -190,7 +220,7 @@ class Seq2seq_autoencoder(Model):
         dec_input = tf.stack(unpacked_dec_input, axis=1)
         
         with tf.variable_scope("decoder"):
-            dec_output, _ = tf.nn.dynamic_rnn(dec_cell, dec_input, None, enc_state) 
+            dec_output, _ = my_rnn.dynamic_rnn(dec_cell, dec_input, None, enc_state) 
 
         embed_pred = dec_output #(None, max_length, embed_size).
         if self.config.sampling:
@@ -210,6 +240,7 @@ class Seq2seq_autoencoder(Model):
             pred = pred + pred_bias
 
         return pred # This is logits for each token.
+
 
     def add_loss_op(self, pred):
         """Adds cross_entropy_loss ops to the computational graph.
@@ -256,7 +287,9 @@ class Seq2seq_autoencoder(Model):
         """
         ### 
         #train_op = tf.train.GradientDescentOptimizer(self.config.lr).minimize(loss)
+        train_op = tf.train.AdamOptimizer(self.config.lr).minimize(loss)
 
+        '''
         optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.config.lr)
 
         #BK: grads_and_vars is a list of (gradient,variable) pairs. Check if this works.
@@ -272,12 +305,13 @@ class Seq2seq_autoencoder(Model):
 
         ###
         assert self.grad_norm is not None, "grad_norm was not set properly!"
+        '''
         return train_op
 
     def preprocess_sequence_data(self, examples):
         return self.pad_sequences(examples, self.config.max_length)     
 
-    def run_epoch(self, sess, train_examples):
+    def run_epoch(self, sess, train_examples, dev_set):
         """Runs an epoch of training.
 
         """
@@ -287,43 +321,72 @@ class Seq2seq_autoencoder(Model):
         #Each setence/label/mask is itself a list of integers or boolean(in case of mask).
             n_minibatches += 1
             total_loss += self.train_on_batch(sess, *batches)
+            '''
+            preds= self.predict_on_batch(sess, *batches)
+            for pred in preds:
+                print [self.helper.id2tok.get(np.argmax(t)) for t in pred]
+            '''
+            
             # batches is a list of input_batch, labels_batch, mask_batch.
             # That is, batches = [input_batch, labels_batch, mask_batch].
+
+        train_loss = total_loss / n_minibatches
+        dev_loss = self.evaluate(sess, dev_set)
+
+        return train_loss, dev_loss
+
+    def evaluate(self, sess, examples):
+        n_minibatches, total_loss = 0, 0
+        for batches in minibatches(examples, self.config.batch_size):
+            n_minibatches += 1
+            total_loss += self.loss_on_batch(sess, *batches)
         return total_loss / n_minibatches
 
-    def fit(self, sess, saver, train_examples_raw):
+    def fit(self, sess, saver, train_examples_raw, dev_set_raw):
         """Fit model on provided data.
 
         """
         # train_examples_raw means unpadded data, which is a list of (sentence, labels) tuples.
         # The length of sentence and labels vary within the list.
         # Sentence and labels are themselves a list of integers representing tokens.
+        best_score = float('inf')
+
         train_examples = self.preprocess_sequence_data(train_examples_raw)
+        dev_set = self.preprocess_sequence_data(dev_set_raw)
 
         losses = []
         for epoch in range(self.config.n_epochs):
             start_time = time.time()
-            average_loss = self.run_epoch(sess, train_examples)
+            train_loss, dev_loss = self.run_epoch(sess, train_examples, dev_set)
             duration = time.time() - start_time
-            print 'Epoch {:}: loss = {:.2f} ({:.3f} sec)'.format(epoch+1, average_loss, duration)
-            losses.append(average_loss)
+            print 'Epoch {:}: train_loss = {:.2f} dev_loss = {:.2f} ({:.3f} sec)'.format(epoch+1, train_loss, dev_loss, duration)
+            losses.append(train_loss)
 
-            if saver and (epoch % 100 == 0):
-                print 'Saving model weights...'
-                saver.save(sess, self.config.model_output)
+            if dev_loss < best_score:
+                best_score = dev_loss
+                if saver:
+                    print 'Saving model weights...'
+                    saver.save(sess, self.config.model_output)
 
         return losses
 
-    def __init__(self, helper, config, pretrained_embeddings):
+    def __init__(self, helper, config, pretrained_embeddings, cell_size, cell_type, cell_init, clip_gradients, activation_choice):
         """Initializes the model.
 
         Args:
             config: A model configuration object of type Config
         """
-        self.max_length = helper.max_length
-        Config.max_length = self.max_length
+        self.helper = helper
         self.pretrained_embeddings = pretrained_embeddings
         self.config = config
+        self.config.max_length = helper.max_length
+        self.config.n_tokens = self.pretrained_embeddings.shape[0]
+        self.config.embed_size = self.pretrained_embeddings.shape[1]
+        self.config.cell_size = cell_size
+        self.config.cell_type = cell_type
+        self.config.cell_init = cell_init
+        self.config.clip_gradients = clip_gradients
+        self.config.activation_choice = activation_choice
         self.build()
 
 def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
@@ -333,18 +396,19 @@ def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
     """
     return np.random.randint(n_tokens, size=(train_size, seq_length, n_features))
 
-def do_seq2seq_prediction():
-    config = Config()
+def do_train(args):
+    config = Config(args)
 
     # Load training data
-    helper, data = load_and_preprocess_data('data/data.txt')
-    inputs = data
-    labels = inputs
+    helper, train, dev = load_and_preprocess_data(args)
+    inputs = train
+    labels = train
     train_examples_raw = zip(inputs,labels) # This is a list of (input, label) tuples.
+    dev_set_raw = zip(dev, dev)
 
     # Load pretrained embedding matrix
     # Embedding matrix has shape of (n_tokens, embed_size)
-    embeddings = load_embeddings('data/vocab.txt', 'data/wordVectors.txt', helper)
+    embeddings = load_embeddings(args, helper)
     config.n_tokens = embeddings.shape[0]
     config.embed_size = embeddings.shape[1]
     helper.save(config.model_path)
@@ -352,14 +416,42 @@ def do_seq2seq_prediction():
     #Create and train a seq2seq autoencoder
     with tf.Graph().as_default():
         print "Building model..."
-        model = Seq2seq_autoencoder(helper, config, embeddings)
+        cell_size = 100
+        cell_type = "rnn"
+        cell_init = "random"
+        clip_gradients = True
+        activation_choice = "tanh"
+        print "We are considering {:} of size N = {:} with activation being {:}.".format(cell_type, cell_size, activation_choice)
+        if clip_gradients:
+            print "Gradient clipping turned on."
+        else:
+            print "Gradient clipping turned off."
+        model = Seq2seq_autoencoder(helper, config, embeddings, cell_size,
+                cell_type, cell_init, clip_gradients, activation_choice)
 
         init = tf.global_variables_initializer()
         saver = tf.train.Saver()
 
         with tf.Session() as sess:
             sess.run(init)
-            model.fit(sess, saver, train_examples_raw)
+            model.fit(sess, saver, train_examples_raw, dev_set_raw)
 
 if __name__ == "__main__":
-    do_seq2seq_prediction()
+    parser = argparse.ArgumentParser(description='Trains and tests an NER model')
+    subparsers = parser.add_subparsers()
+
+    # Training
+    command_parser = subparsers.add_parser('train', help='')
+    command_parser.add_argument('-dt', '--data-train', default="data/train.txt", help="Training data")
+    command_parser.add_argument('-dd', '--data-dev', default="data/dev.txt", help="Dev data")
+    command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
+    command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
+    command_parser.add_argument('-c', '--cell', choices=["rnn", "gru", "lstm"], default="rnn", help="Type of RNN cell to use.")
+    command_parser.set_defaults(func=do_train)
+
+    ARGS = parser.parse_args()
+    if ARGS.func is None:
+        parser.print_help()
+        sys.exit(1)
+    else:
+        ARGS.func(ARGS)

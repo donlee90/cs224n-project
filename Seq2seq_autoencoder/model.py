@@ -104,7 +104,7 @@ class Model(object):
         loss = sess.run(self.loss, feed_dict=feed)
         return loss
 
-    def predict_on_batch(self, sess, inputs_batch):
+    def predict_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
         """Make predictions for the provided batch of data
 
         Args:
@@ -113,7 +113,7 @@ class Model(object):
         Returns:
             predictions: np.ndarray of shape (n_samples, n_classes)
         """
-        feed = self.create_feed_dict(inputs_batch)
+        feed = self.create_feed_dict(inputs_batch, mask_batch=mask_batch)
         predictions = sess.run(self.pred, feed_dict=feed)
         return predictions
 

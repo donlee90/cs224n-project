@@ -16,7 +16,7 @@ _GO = b"_GO"
 _EOS = b"_EOS"
 _UNK = b"_UNK"
 _NUM = b"_NUM"
-_START_VOCAB = [_PAD, _GO, _EOS, _UNK, _NUM]
+_START_VOCAB = [_PAD, _GO, _EOS, _UNK]
 
 # Regular expressions used to tokenize.
 _WORD_SPLIT = re.compile(b"([.,!?\"':;)(])")
@@ -48,7 +48,7 @@ class ModelHelper(object):
         self.max_length = max_length
 
     def vectorize_example(self, sentence):
-        sentence_ = [self.tok2id.get(normalize(word))\
+        sentence_ = [self.tok2id.get(normalize(word), self.tok2id[_UNK])\
                     for word in basic_tokenizer(sentence)]
         return sentence_
 
@@ -105,23 +105,24 @@ def build_dict(words, max_words=None, offset=0):
     return {word: offset+i for i, (word, _) in enumerate(words)}
 
 
-def load_and_preprocess_data(data_path):
+def load_and_preprocess_data(args):
     # Build tok2id and id2tok mapping
     print "Loading training data..."
-    helper = ModelHelper.build(data_path)
+    helper = ModelHelper.build(args.data_train)
 
     # Process all the input data
     # Convert all the sentences into sequences of token ids
-    data = helper.vectorize(data_path)
+    train_data = helper.vectorize(args.data_train)
+    dev_data = helper.vectorize(args.data_dev)
+    print 'train size:', len(train_data)
+    print 'dev size:', len(dev_data)
 
-    return helper, data
-
+    return helper, train_data, dev_data
 def load_word_vector_mapping(vocab_fstream, vector_fstream):
     """
     Load word vector mapping using @vocab_fstream, @vector_fstream.
     Assumes each line of the vocab file matches with those of the vector
-    file.
-    """
+    file.  """
     ret = OrderedDict()
     for vocab, vector in zip(vocab_fstream, vector_fstream):
         vocab = vocab.strip()
@@ -130,10 +131,10 @@ def load_word_vector_mapping(vocab_fstream, vector_fstream):
 
     return ret
 
-def load_embeddings(vocab_path, vectors_path, helper):
-    embeddings = np.array(np.random.randn(len(helper.tok2id) + 1, EMBED_SIZE),
+def load_embeddings(args, helper):
+    embeddings = np.array(np.random.randn(len(helper.tok2id), EMBED_SIZE),
                           dtype=np.float32)
-    with open(vocab_path) as vocab, open(vectors_path) as vectors:
+    with open(args.vocab) as vocab, open(args.vectors) as vectors:
         for word, vec in load_word_vector_mapping(vocab, vectors).items():
             word = normalize(word)
             if word in helper.tok2id:
