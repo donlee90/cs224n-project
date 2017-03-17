@@ -29,12 +29,11 @@ class Config(object):
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
     cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
     activation_choice = "relu" #This must be either "relu" or "tanh". 
-    enc_dropout = 0.5
-    dec_dropout = 0.5
+    enc_dropout = 0.8
+    dec_dropout = 0.8
 
     clip_gradients = True
     max_grad_norm = 1e3
-    padding_int = 0
     sampling = False
     n_sampled = 1000
 
@@ -91,7 +90,8 @@ class Seq2seq_autoencoder(Model):
         """
         ret = []
         # padding_int is the index or integer used for padding. 
-        padding_int = self.config.padding_int
+        _PAD = b"_PAD"
+        padding_int = self.helper.tok2id.get(_PAD)
 
         for sentence, labels in data:
             ### YOUR CODE HERE (~4-6 lines)
@@ -193,7 +193,7 @@ class Seq2seq_autoencoder(Model):
         # embeddings: tensor of shape (None, max_length, embed_size)
         embeddings = tf.nn.embedding_lookup(embedding_tensor, self.input_placeholder)
         ### END YOUR CODE
-        return embeddings
+        return embeddings, embedding_tensor
 
     def add_prediction_op(self):
         """Adds the core transformation for this model which transforms a batch of input
@@ -221,13 +221,14 @@ class Seq2seq_autoencoder(Model):
             dec_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
             dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)                        
 
-        enc_input = self.add_embedding() # (None, max_length, embed_size)
+        enc_input, embedding_tensor = self.add_embedding() # (None, max_length, embed_size)
         with tf.variable_scope("encoder"):
             """None represents the argument 'sequence_length', which is a tensor of shape [batch_size], which specifies the length of the sequence 
             for each element of the batch. The fourth arg is initial state."""
             _, enc_state = my_rnn.dynamic_rnn(enc_cell, enc_input, None, dtype=tf.float32)
 
         #Creates a decoder input, for which we append the zero vector at the beginning of each sequence, which serves as the "GO" token.
+        go_embedding = embedding_tensor[self.helper.tok2id.get("_GO")]
         unpacked_enc_input = tf.unstack(enc_input, axis=1)
         unpacked_dec_input = [tf.zeros_like(unpacked_enc_input[0])] + unpacked_enc_input[:-1]
         dec_input = tf.stack(unpacked_dec_input, axis=1)
@@ -302,10 +303,9 @@ class Seq2seq_autoencoder(Model):
             train_op: The Op for training.
         """
         ### 
-        #train_op = tf.train.GradientDescentOptimizer(self.config.lr).minimize(loss)
-        train_op = tf.train.AdamOptimizer(self.config.lr).minimize(loss)
+        train_op = tf.train.GradientDescentOptimizer(self.config.lr).minimize(loss)
+        #train_op = tf.train.AdamOptimizer(self.config.lr).minimize(loss)
 
-        '''
         optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.config.lr)
 
         #BK: grads_and_vars is a list of (gradient,variable) pairs. Check if this works.
@@ -321,7 +321,6 @@ class Seq2seq_autoencoder(Model):
 
         ###
         assert self.grad_norm is not None, "grad_norm was not set properly!"
-        '''
         return train_op
 
     def preprocess_sequence_data(self, examples):
