@@ -3,7 +3,7 @@ from datetime import datetime
 
 import tensorflow as tf
 import numpy as np
-from model import Model
+from seq_model import SeqModel
 import time
 from utils.general_utils import minibatches
 from data_utils import load_and_preprocess_data, load_embeddings
@@ -29,6 +29,7 @@ class Config(object):
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
     cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
     activation_choice = "relu" #This must be either "relu" or "tanh". 
+    feed_decoder = True
     enc_dropout = 0.8
     dec_dropout = 0.8
 
@@ -38,17 +39,34 @@ class Config(object):
     n_sampled = 1000
 
     def __init__(self, args):
-        self.cell = args.cell
+        self.cell_type = args.cell_type
+        self.cell_size = args.cell_size
+        self.cell_init = args.cell_init
+        self.activation_choice = args.activation_choice
+        self.clip_gradients = args.clip_gradients
+        self.feed_decoder = args.feed_decoder
 
         if "model_path" in args:
             self.model_path = args.model_path
         else:
-            self.model_path = "results/{}/{:%Y%m%d_%H%M%S}/".format(self.cell, datetime.now())
+            if self.feed_decoder:
+                 self.model_path = "results/{}_{}_{}_{}_feed_dec/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
+                                                                         self.cell_size,
+                                                                         self.cell_init,
+                                                                         self.activation_choice,
+                                                                         datetime.now())
+
+            else:
+                self.model_path = "results/{}_{}_{}_{}/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
+                                                                         self.cell_size,
+                                                                         self.cell_init,
+                                                                         self.activation_choice,
+                                                                         datetime.now())
 
         self.model_output = self.model_path + "model.weights"
 
 
-class Seq2seq_autoencoder(Model):
+class Seq2seq_autoencoder(SeqModel):
 # For my own benefit: (Model) means SoftmaxModel class inherits from Model class defined
 # in model.py. Therefore, it can use self.build() for e.g.
     """Implements a Softmax classifier with cross-entropy loss."""
@@ -228,13 +246,22 @@ class Seq2seq_autoencoder(Model):
             _, enc_state = my_rnn.dynamic_rnn(enc_cell, enc_input, None, dtype=tf.float32)
 
         #Creates a decoder input, for which we append the zero vector at the beginning of each sequence, which serves as the "GO" token.
-        go_embedding = embedding_tensor[self.helper.tok2id.get("_GO")]
-        unpacked_enc_input = tf.unstack(enc_input, axis=1)
-        unpacked_dec_input = [tf.zeros_like(unpacked_enc_input[0])] + unpacked_enc_input[:-1]
-        dec_input = tf.stack(unpacked_dec_input, axis=1)
+        if self.config.feed_decoder:
+            go_embedding = embedding_tensor[self.helper.tok2id.get("_GO")]
+            unpacked_enc_input = tf.unstack(enc_input, axis=1)
+            unpacked_dec_input = [tf.zeros_like(unpacked_enc_input[0])+go_embedding] + unpacked_enc_input[:-1]
+            dec_input = tf.stack(unpacked_dec_input, axis=1)
+        else:
+            dec_input = tf.zeros_like(enc_input)
 
         #Create a drop-out enc_state, which is later fed into the decoder.
-        enc_state = tf.nn.dropout(enc_state, enc_dropout_rate)
+        if self.config.cell_type == "lstm":
+            c, h = enc_state
+            c_dropout = tf.nn.dropout(c, enc_dropout_rate)
+            h_dropout = tf.nn.dropout(h, enc_dropout_rate)
+            enc_state = my_rnn_cell.LSTMStateTuple(c_dropout, h_dropout)
+        else:
+            enc_state = tf.nn.dropout(enc_state, enc_dropout_rate)
         
         with tf.variable_scope("decoder"):
             dec_output, _ = my_rnn.dynamic_rnn(dec_cell, dec_input, None, enc_state) 
@@ -303,24 +330,15 @@ class Seq2seq_autoencoder(Model):
             train_op: The Op for training.
         """
         ### 
-        train_op = tf.train.GradientDescentOptimizer(self.config.lr).minimize(loss)
-        #train_op = tf.train.AdamOptimizer(self.config.lr).minimize(loss)
-
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.config.lr)
-
-        #BK: grads_and_vars is a list of (gradient,variable) pairs. Check if this works.
-        grads_and_vars = optimizer.compute_gradients(loss, tf.trainable_variables())
-        gradients = [pair[0] for pair in grads_and_vars]
-
         if self.config.clip_gradients:
-            gradients, _ = tf.clip_by_global_norm(gradients, self.config.max_grad_norm)
-
-        self.grad_norm = tf.global_norm(gradients)
-        grads_and_vars = [(gradients[idx],pair[1]) for idx, pair in enumerate(grads_and_vars)]
-        train_op = optimizer.apply_gradients(grads_and_vars)  
-
+            optimizer = tf.train.AdamOptimizer(self.config.lr)
+            tvars = tf.trainable_variables()
+            original_grads = tf.gradients(loss, tvars) 
+            grads, _ = tf.clip_by_global_norm(original_grads, self.config.max_grad_norm)
+            train_op = optimizer.apply_gradients(zip(grads, tvars))
+        else:
+            train_op = tf.train.AdamOptimizer(self.config.lr).minimize(loss)
         ###
-        assert self.grad_norm is not None, "grad_norm was not set properly!"
         return train_op
 
     def preprocess_sequence_data(self, examples):
@@ -385,7 +403,7 @@ class Seq2seq_autoencoder(Model):
 
         return losses
 
-    def __init__(self, helper, config, pretrained_embeddings, cell_size, cell_type, cell_init, clip_gradients, activation_choice):
+    def __init__(self, helper, config, pretrained_embeddings):
         """Initializes the model.
 
         Args:
@@ -397,11 +415,6 @@ class Seq2seq_autoencoder(Model):
         self.config.max_length = helper.max_length
         self.config.n_tokens = self.pretrained_embeddings.shape[0]
         self.config.embed_size = self.pretrained_embeddings.shape[1]
-        self.config.cell_size = cell_size
-        self.config.cell_type = cell_type
-        self.config.cell_init = cell_init
-        self.config.clip_gradients = clip_gradients
-        self.config.activation_choice = activation_choice
         self.build()
 
 def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
@@ -413,6 +426,13 @@ def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
 
 def do_train(args):
     config = Config(args)
+    print "== Seq2Seq Config =="
+    print "  Cell size:", config.cell_size
+    print "  Cell type:", config.cell_type
+    print "  Cell init:", config.cell_init
+    print "  Activation:", config.activation_choice
+    print "  Gradient clipping:", config.clip_gradients
+    print "  Feed decoder:", config.feed_decoder
 
     # Load training data
     helper, train, dev = load_and_preprocess_data(args)
@@ -431,18 +451,7 @@ def do_train(args):
     #Create and train a seq2seq autoencoder
     with tf.Graph().as_default():
         print "Building model..."
-        cell_size = 100
-        cell_type = "rnn"
-        cell_init = "random"
-        clip_gradients = True
-        activation_choice = "tanh"
-        print "We are considering {:} of size N = {:} with activation being {:}.".format(cell_type, cell_size, activation_choice)
-        if clip_gradients:
-            print "Gradient clipping turned on."
-        else:
-            print "Gradient clipping turned off."
-        model = Seq2seq_autoencoder(helper, config, embeddings, cell_size,
-                cell_type, cell_init, clip_gradients, activation_choice)
+        model = Seq2seq_autoencoder(helper, config, embeddings)
 
         init = tf.global_variables_initializer()
         saver = tf.train.Saver()
@@ -461,7 +470,17 @@ if __name__ == "__main__":
     command_parser.add_argument('-dd', '--data-dev', default="data/dev.txt", help="Dev data")
     command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
     command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
-    command_parser.add_argument('-c', '--cell', choices=["rnn", "gru", "lstm"], default="rnn", help="Type of RNN cell to use.")
+    command_parser.add_argument('-ct', '--cell-type', choices=["rnn", "gru", "lstm"],
+            default="rnn", help="Type of RNN cell to use.")
+    command_parser.add_argument('-cs', '--cell-size', default=200, type=int,  help="Size of cell.")
+    command_parser.add_argument('-ci', '--cell-init', choices=["random", "identity"],
+            default="random", help="Cell initialization.")
+    command_parser.add_argument('-ac', '--activation-choice', choices=["tanh", "relu"],
+            default="tanh", help="Activation function.")
+    command_parser.add_argument('-cg', '--clip-gradients',
+            action="store_true",help="Enable gradient clipping.", default=False)
+    command_parser.add_argument('-fd', '--feed-decoder', action="store_true", default=False)
+
     command_parser.set_defaults(func=do_train)
 
     ARGS = parser.parse_args()
