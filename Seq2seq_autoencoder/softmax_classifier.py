@@ -89,7 +89,7 @@ class SoftmaxModel(Model): #For my own benefit: (Model) means SoftmaxModel class
         """
         ### YOUR CODE HERE
         x = self.input_placeholder
-        W = tf.Variable(tf.zeros((self.config.state_size, self.config.n_classes)))
+        W = tf.Variable(tf.zeros((self.config.input_size, self.config.n_classes)))
         b = tf.Variable(tf.zeros((self.config.n_classes,)))
         pred = tf.matmul(x,W) + b
         ### END YOUR CODE
