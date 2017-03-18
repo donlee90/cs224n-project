@@ -285,6 +285,39 @@ class Seq2seq_autoencoder(SeqModel):
 
         return pred # This is logits for each token.
 
+    def add_encoding_op(self):
+        
+        enc_dropout_rate = self.enc_dropout_placeholder
+        dec_dropout_rate = self.dec_dropout_placeholder
+
+        if self.config.activation_choice == "relu":
+            activation = tf.nn.relu
+        else:
+            activation = tf.nn.tanh
+        if self.config.cell_type == "rnn":
+            enc_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
+        elif self.config.cell_type == "gru":
+            enc_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
+        elif self.config.cell_type == "lstm":
+            enc_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
+            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)                        
+
+        enc_input, embedding_tensor = self.add_embedding() # (None, max_length, embed_size)
+        with tf.variable_scope("encoder"):
+            """None represents the argument 'sequence_length', which is a tensor of shape [batch_size], which specifies the length of the sequence 
+            for each element of the batch. The fourth arg is initial state."""
+            _, enc_state = my_rnn.dynamic_rnn(enc_cell, enc_input, None, dtype=tf.float32)
+
+        if self.config.cell_type == "lstm": # In case of LSTM, we average c and h.
+            c, h = enc_state
+            enc_state = (c + h)/2
+
+        return enc_state 
 
     def add_loss_op(self, pred):
         """Adds cross_entropy_loss ops to the computational graph.
