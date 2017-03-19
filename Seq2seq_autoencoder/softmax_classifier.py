@@ -14,7 +14,7 @@ class SoftmaxConfig(object): #For my own benefit: (object) means that Config cla
     n_samples = 1024
     input_size = 100
     n_classes = 5
-    batch_size = 64 #For my own benefit: batch_size really means mini_batch_size. The total number of training samples (which is sometimes called "batch_size" is n_samples above.)
+    batch_size = 50 #For my own benefit: batch_size really means mini_batch_size. The total number of training samples (which is sometimes called "batch_size" is n_samples above.)
     n_epochs = 50
     lr = 1e-4
 
