@@ -52,9 +52,8 @@ class ModelHelper(object):
                     for word in basic_tokenizer(sentence)]
         return sentence_
 
-    def vectorize(self, data_path):
-        with open(data_path) as f:
-            return [self.vectorize_example(line) for line in f]
+    def vectorize(self, data):
+        return [self.vectorize_example(line) for line in data]
 
     @classmethod
     def build(cls, data_path):
@@ -65,7 +64,7 @@ class ModelHelper(object):
 
             # Populate dict with words in the data
             words = [normalize(word) for line in f for word in basic_tokenizer(line)]
-            tok2id.update(build_dict(words, offset=len(tok2id)))
+            tok2id.update(build_dict(words, max_words=10000, offset=len(tok2id)))
 
             # Build mapping from id to token (for decoder output)
             id2tok = {token_id: word for (word, token_id) in tok2id.items()}
@@ -105,6 +104,13 @@ def build_dict(words, max_words=None, offset=0):
     return {word: offset+i for i, (word, _) in enumerate(words)}
 
 
+def load_data(data_path):
+    data = []
+    with open(data_path) as f:
+        for line in f:
+            data.append(line)
+    return data
+
 def load_and_preprocess_data(args):
     # Build tok2id and id2tok mapping
     print "Loading training data..."
@@ -112,8 +118,11 @@ def load_and_preprocess_data(args):
 
     # Process all the input data
     # Convert all the sentences into sequences of token ids
-    train_data = helper.vectorize(args.data_train)
-    dev_data = helper.vectorize(args.data_dev)
+    train = load_data(args.data_train)
+    train_data = helper.vectorize(train)
+
+    dev = load_data(args.data_dev)
+    dev_data = helper.vectorize(dev)
     print 'train size:', len(train_data)
     print 'dev size:', len(dev_data)
 
