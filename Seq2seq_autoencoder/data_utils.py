@@ -28,7 +28,7 @@ def basic_tokenizer(sentence):
   words = []
   for space_separated_fragment in sentence.strip().split():
     if isinstance(space_separated_fragment, str):
-        word = str.encode(space_separated_fragment)
+        word = space_separated_fragment
     else:
         word = space_separated_fragment  
     words.extend(re.split(_WORD_SPLIT, word))

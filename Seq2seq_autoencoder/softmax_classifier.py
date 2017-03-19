@@ -15,8 +15,8 @@ class SoftmaxConfig(object): #For my own benefit: (object) means that Config cla
     input_size = 100
     n_classes = 5
     batch_size = 50 #For my own benefit: batch_size really means mini_batch_size. The total number of training samples (which is sometimes called "batch_size" is n_samples above.)
-    n_epochs = 50
-    lr = 1e-4
+    n_epochs = 10000
+    lr = 1e-2
 
 
 class SoftmaxModel(Model): #For my own benefit: (Model) means SoftmaxModel class inherits from Model class defined in model.py. Therefore, it can use self.build() for e.g.
@@ -41,7 +41,7 @@ class SoftmaxModel(Model): #For my own benefit: (Model) means SoftmaxModel class
         """
         ### YOUR CODE HERE
         input_placeholder = tf.placeholder(tf.float32,(None, self.config.input_size))
-        labels_placeholder = tf.placeholder(tf.int32,(None, self.config.n_classes))
+        labels_placeholder = tf.placeholder(tf.int32,(None,))
         self.input_placeholder = input_placeholder
         self.labels_placeholder = labels_placeholder
         ### END YOUR CODE
@@ -106,7 +106,7 @@ class SoftmaxModel(Model): #For my own benefit: (Model) means SoftmaxModel class
             loss: A 0-d tensor (scalar)
         """
         ### YOUR CODE HERE
-        loss = tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=self.labels_placeholder)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred, labels=self.labels_placeholder)
         loss = tf.reduce_mean(loss)
         ### END YOUR CODE
         return loss
