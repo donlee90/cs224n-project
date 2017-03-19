@@ -117,9 +117,14 @@ class SeqModel(object):
         predictions = sess.run(self.pred, feed_dict=feed)
         return predictions
 
+    def encode_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
+        feed = self.create_feed_dict(inputs_batch, mask_batch=mask_batch)
+        encodings = sess.run(self.enc, feed_dict=feed)
+        return encodings
+
     def build(self):
         self.add_placeholders()
-        self.pred = self.add_prediction_op()
+        self.enc, self.pred = self.add_prediction_op()
         if self.config.sampling:
             self.loss = self.add_sampled_loss_op(self.pred)
         else:

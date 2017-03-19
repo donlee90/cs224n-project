@@ -1,12 +1,13 @@
 import argparse
 from datetime import datetime
+from os.path import basename
 
 import tensorflow as tf
 import numpy as np
 from seq_model import SeqModel
 import time
 from utils.general_utils import minibatches
-from data_utils import load_and_preprocess_data, load_embeddings
+from data_utils import load_and_preprocess_data, load_embeddings, load_data, ModelHelper
 import my_rnn_cell
 import my_rnn
 
@@ -25,7 +26,7 @@ class Config(object):
     n_tokens = 7
     n_epochs = 5000
     lr = 1e-3
-    cell_size = None
+    cell_size = 200
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
     cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
     activation_choice = "relu" #This must be either "relu" or "tanh". 
@@ -39,18 +40,24 @@ class Config(object):
     n_sampled = 1000
 
     def __init__(self, args):
-        self.cell_type = args.cell_type
-        self.cell_size = args.cell_size
-        self.cell_init = args.cell_init
-        self.activation_choice = args.activation_choice
-        self.clip_gradients = args.clip_gradients
-        self.feed_decoder = args.feed_decoder
+        if "cell_type" in args:
+            self.cell_type = args.cell_type
+        if "cell_size" in args:
+            self.cell_size = args.cell_size
+        if "cell_init" in args:
+            self.cell_init = args.cell_init
+        if "activation_choice" in args:
+            self.activation_choice = args.activation_choice
+        if "clip_gradients" in args:
+            self.clip_gradients = args.clip_gradients
+        if "feed_decoder" in args:
+            self.feed_decoder = args.feed_decoder
 
         if "model_path" in args:
             self.model_path = args.model_path
         else:
             if self.feed_decoder:
-                 self.model_path = "results/{}_{}_{}_{}_feed_dec/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
+                self.model_path = "results/{}_{}_{}_{}_feed_dec/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
                                                                          self.cell_size,
                                                                          self.cell_init,
                                                                          self.activation_choice,
@@ -63,7 +70,7 @@ class Config(object):
                                                                          self.activation_choice,
                                                                          datetime.now())
 
-        self.model_output = self.model_path + "model.weights"
+        self.model_output = self.model_path + "/model.weights"
 
 
 class Seq2seq_autoencoder(SeqModel):
@@ -283,41 +290,11 @@ class Seq2seq_autoencoder(SeqModel):
             pred = tf.reshape(pred, (-1, self.config.max_length, self.config.n_tokens))
             pred = pred + pred_bias
 
-        return pred # This is logits for each token.
-
-    def add_encoding_op(self):
-        
-        enc_dropout_rate = self.enc_dropout_placeholder
-        dec_dropout_rate = self.dec_dropout_placeholder
-
-        if self.config.activation_choice == "relu":
-            activation = tf.nn.relu
-        else:
-            activation = tf.nn.tanh
-        if self.config.cell_type == "rnn":
-            enc_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.BasicRNNCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
-        elif self.config.cell_type == "gru":
-            enc_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.GRUCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)
-        elif self.config.cell_type == "lstm":
-            enc_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.BasicLSTMCell(self.config.cell_size, self.config.cell_init, activation=activation)
-            dec_cell = my_rnn_cell.OutputProjectionWrapper(dec_cell, self.config.embed_size, dec_dropout_rate)                        
-
-        enc_input, embedding_tensor = self.add_embedding() # (None, max_length, embed_size)
-        with tf.variable_scope("encoder"):
-            """None represents the argument 'sequence_length', which is a tensor of shape [batch_size], which specifies the length of the sequence 
-            for each element of the batch. The fourth arg is initial state."""
-            _, enc_state = my_rnn.dynamic_rnn(enc_cell, enc_input, None, dtype=tf.float32)
-
         if self.config.cell_type == "lstm": # In case of LSTM, we average c and h.
             c, h = enc_state
             enc_state = (c + h)/2
 
-        return enc_state 
+        return enc_state, pred # This is logits for each token.
 
     def add_loss_op(self, pred):
         """Adds cross_entropy_loss ops to the computational graph.
@@ -436,6 +413,21 @@ class Seq2seq_autoencoder(SeqModel):
 
         return losses
 
+    def encode(self, sess, inputs_raw):
+        """
+            inputs_raw: list of sentences
+        """
+        vectorized = self.helper.vectorize(inputs_raw)
+        inputs = self.preprocess_sequence_data(zip(vectorized, vectorized))
+
+        encodings = []
+        for i, batch in enumerate(minibatches(inputs, self.config.batch_size, shuffle=False)):
+            encodings_ = self.encode_on_batch(sess, *batch)
+            encodings += list(encodings_)
+
+        return encodings
+
+
     def __init__(self, helper, config, pretrained_embeddings):
         """Initializes the model.
 
@@ -457,6 +449,60 @@ def generate_sequence_data(n_tokens, train_size, seq_length, n_features=1):
     """
     return np.random.randint(n_tokens, size=(train_size, seq_length, n_features))
 
+def build_seq2seq_config(args):
+
+    def parse_model_path(config, model_path):
+        model = model_path.split('/')[-2]
+        print model
+
+        configs = model.split('_')
+        config.cell_type = configs[0]
+        config.cell_size = int(configs[1])
+        config.cell_init = configs[2]
+        config.activation_choice = configs[3]
+        if len(configs) == 6:
+            config.feed_decoder = True
+        else:
+            config.feed_decoder = False
+        
+        return config
+
+    config = Config(args)
+    parse_model_path(config, args.model_path)
+
+    print "== Seq2Seq Config =="
+    print "  Cell size:", config.cell_size
+    print "  Cell type:", config.cell_type
+    print "  Cell init:", config.cell_init
+    print "  Activation:", config.activation_choice
+    print "  Gradient clipping:", config.clip_gradients
+    print "  Feed decoder:", config.feed_decoder
+
+    return config
+
+
+def test_encoding(args):
+    config = build_seq2seq_config(args)
+    helper = ModelHelper.load(args.model_path)
+    input_data = load_data(args.data)
+
+    embeddings = load_embeddings(args, helper)
+    config.n_tokens = embeddings.shape[0]
+    config.embed_size = embeddings.shape[1]
+
+    with tf.Graph().as_default():
+        model = Seq2seq_autoencoder(helper, config, embeddings)
+        init = tf.global_variables_initializer()
+        saver = tf.train.Saver()
+
+        with tf.Session() as sess:
+            sess.run(init)
+            print model.config.model_output
+            saver.restore(sess, model.config.model_output)
+            encodings = model.encode(sess, input_data)
+
+            print encodings
+ 
 def do_train(args):
     config = Config(args)
     print "== Seq2Seq Config =="
@@ -497,6 +543,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Trains and tests an NER model')
     subparsers = parser.add_subparsers()
 
+    command_parser = subparsers.add_parser('test1', help='')
+    command_parser.add_argument('-d', '--data', default="test.txt")
+    command_parser.add_argument('-m', '--model-path')
+    command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
+    command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
+    command_parser.set_defaults(func=test_encoding)
+
     # Training
     command_parser = subparsers.add_parser('train', help='')
     command_parser.add_argument('-dt', '--data-train', default="data/train.txt", help="Training data")
@@ -515,6 +568,7 @@ if __name__ == "__main__":
     command_parser.add_argument('-fd', '--feed-decoder', action="store_true", default=False)
 
     command_parser.set_defaults(func=do_train)
+
 
     ARGS = parser.parse_args()
     if ARGS.func is None:
