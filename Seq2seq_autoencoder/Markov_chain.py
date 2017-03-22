@@ -26,9 +26,8 @@ def markov_seq(n_state, n_order, trans_dict, seq_length, batch_size):
 			markov_seq[j,i+n_order] = next_single_state
 
 	trans_dist = trans_dict[trans_dict.keys()[0]] # This is a 1d array representing transition probability distribution from a random total state. 
-	entropy_rate = -np.sum(trans_dist*np.log(trans_dist))
 
-	return markov_seq.astype(int), entropy_rate
+	return markov_seq.astype(int) #astype(int) is to make markov_seq integer-type.
 
 def generate_trans_dict(n_state, n_order, trans_prob):
 	"""
@@ -45,17 +44,8 @@ def generate_trans_dict(n_state, n_order, trans_prob):
 	state_list = list(itertools.product(range(n_state), repeat=n_order))
 	for state in state_list:
 		trans_dict[state] = np.random.permutation(trans_prob)
-	return trans_dict
-	
+	entropy_rate = -np.sum(trans_prob*np.log(trans_prob))	
+	return trans_dict, entropy_rate
 
-
-if __name__ == '__main__':
-	n_state = 2
-	n_order = 1
-	trans_prob = np.array([0.01, 0.99])
-	trans_dict = generate_trans_dict(n_state, n_order, trans_prob)
-	print trans_dict
-	test_seq = markov_seq(n_state, n_order, trans_dict, 10, 20)
-	print test_seq
 
 

@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
-from os.path import basename
+import os
+from itertools import product 
 
 import tensorflow as tf
 import numpy as np
@@ -21,22 +22,24 @@ class Config(object):
     information parameters. Model objects are passed a Config() object at
     instantiation.
     """
+    batch_size = 20
+    n_epochs = 30
+    lr =4e-3
+
     max_length = 10 # max_length
-    embed_size = 50
-    batch_size = 50
     n_tokens = 7
-    n_epochs = 5000
-    lr = 1e-3
+    embed_size = 50
+
     cell_size = 200
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
     cell_init = "random" #This must be either "random" or "identity". Default is "random" and it can be changed in do seq2seq_prediction().
     activation_choice = "relu" #This must be either "relu" or "tanh". 
     feed_decoder = True
-    enc_dropout = 0.8
-    dec_dropout = 0.8
-
+    enc_dropout = 1
+    dec_dropout = 1
     clip_gradients = True
     max_grad_norm = 1e3
+    
     sampling = False
     n_sampled = 1000
 
@@ -58,18 +61,28 @@ class Config(object):
             self.model_path = args.model_path
         else:
             if self.feed_decoder:
-                self.model_path = "markov_results/{}_{}_{}_{}_feed_dec/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
-                                                                         self.cell_size,
-                                                                         self.cell_init,
-                                                                         self.activation_choice,
-                                                                         datetime.now())
-
+                # self.model_path = "markov_results/{}_{}_{}_{}_feed_dec/{:%Y%m%d_%H%M%S}".format(self.cell_type,
+                #                                                          self.cell_size,
+                #                                                          self.cell_init,
+                #                                                          self.activation_choice,datetime.now()
+                #                                                          )
+                self.model_path = "markov_results/{}_{}_{}_{}_feed_dec".format(self.cell_type,
+                                                                               self.cell_size,
+                                                                               self.cell_init,
+                                                                               self.activation_choice)                
             else:
-                self.model_path = "markov_results/{}_{}_{}_{}/{:%Y%m%d_%H%M%S}/".format(self.cell_type,
-                                                                         self.cell_size,
-                                                                         self.cell_init,
-                                                                         self.activation_choice,
-                                                                         datetime.now())
+                # self.model_path = "markov_results/{}_{}_{}_{}/{:%Y%m%d_%H%M%S}".format(self.cell_type,
+                #                                                          self.cell_size,
+                #                                                          self.cell_init,
+                #                                                          self.activation_choice,
+                #                                                          datetime.now())
+                self.model_path = "markov_results/{}_{}_{}_{}".format(self.cell_type,
+                                                                      self.cell_size,
+                                                                      self.cell_init,
+                                                                      self.activation_choice)              
+
+        if not os.path.exists(self.model_path):
+            os.makedirs(self.model_path)
 
         self.model_output = self.model_path + "/model.weights"
 
@@ -385,11 +398,11 @@ class Seq2seq_autoencoder(SeqModel):
 
     def evaluate(self, sess, examples):
         n_minibatches, total_loss = 0, 0
-        mask_batch = np.full((self.config.batch_size, self.config.max_length), fill_value=True)
-        for inputs_batch, labels_batch in get_minibatches(examples, self.config.batch_size):
-            n_minibatches += 1
-            total_loss += self.loss_on_batch(sess, inputs_batch, labels_batch, mask_batch)
-        return total_loss / n_minibatches
+        inputs = examples[0] 
+        labels = examples[1]
+        mask = np.full_like(inputs, fill_value=True)
+        total_loss = self.loss_on_batch(sess, inputs, labels, mask) #Since we are just evaluating a loss, we don't need to divide examples into minibatches.
+        return total_loss
 
     def fit(self, sess, saver, train_examples_raw, dev_set_raw):
         """Fit model on provided data.
@@ -482,18 +495,61 @@ def build_seq2seq_config(args):
 
     return config
 
+class MarkovConfig(object):
+    seq_length = 20
+    def __init__(self,args):
+    	self.n_state = args.markov_n_state
+    	self.n_order = args.markov_n_order
+    	self.low_entropy = args.markov_low_entropy
+    	if self.low_entropy:
+	    p_peak=0.85
+	    self.trans_prob = (1-p_peak)/(self.n_state-1)*np.ones(self.n_state)
+	    self.trans_prob[0] = p_peak
+        else:
+	    self.trans_prob = np.ones(self.n_state)
+	    self.trans_prob = (1.0/self.n_state)*self.trans_prob	  
 
-def test_encoding(args):
-    config = build_seq2seq_config(args)
-    helper = ModelHelper.load(args.model_path)
-    input_data = load_data(args.data)
+	np.random.seed(2)
+        self.trans_dict, self.entropy_rate = mc.generate_trans_dict(self.n_state, self.n_order, self.trans_prob)
 
-    embeddings = load_embeddings(args, helper)
-    config.n_tokens = embeddings.shape[0]
-    config.embed_size = embeddings.shape[1]
+def do_train_and_test(args):
+    markov_config = MarkovConfig(args)
+    do_train(args, markov_config)
+    do_test(args, markov_config)
 
+def do_test(args, markov_config):
+    config = Config(args)
+    print "== Seq2Seq Config =="
+    print "  Cell size:", config.cell_size
+    print "  Cell type:", config.cell_type
+    print "  Cell init:", config.cell_init
+    print "  Activation:", config.activation_choice
+    print "  Gradient clipping:", config.clip_gradients
+    print "  Feed decoder:", config.feed_decoder
+    
+    print "== Markov Chain Config =="
+    print "Number of states:", markov_config.n_state
+    print "Markov chain order:", markov_config.n_order
+    print "Markov sequence length:", markov_config.seq_length
+    print "Markov transition probability:", markov_config.trans_prob
+    print "Markov entropy rate:", markov_config.entropy_rate
+
+    # Create data
+    config.max_length = markov_config.seq_length #Set max_length equal to seq_length of the data.
+    #training set
+    test_size = 2500
+    np.random.seed(49)
+    test_markov_seq = mc.markov_seq(markov_config.n_state, markov_config.n_order, markov_config.trans_dict, markov_config.seq_length, test_size) #markov_seq: int np.array of (example_size, seq_length). entropy_rate is a float scalar.
+    test_set_raw = [test_markov_seq]*2 
+    # Load pretrained embedding matrix
+    # Embedding matrix has shape of (n_tokens, embed_size)
+    n_tokens = markov_config.n_state + 1 # +1 in n_state + 1 is for "GO" token used in dec_input in add_prediction_op.
+    embed_size = 1
+    np.random.seed(1) #This is not really necessary, since do_test restore the do_train's variable anyways. 
+    embeddings = np.float32(np.random.randn(n_tokens, embed_size)) #np.random.randn gives float64.
+    #Create and train a seq2seq autoencoder
     with tf.Graph().as_default():
-        model = Seq2seq_autoencoder(helper, config, embeddings)
+        model = Seq2seq_autoencoder(config, embeddings)
         init = tf.global_variables_initializer()
         saver = tf.train.Saver()
 
@@ -501,12 +557,21 @@ def test_encoding(args):
             sess.run(init)
             print model.config.model_output
             saver.restore(sess, model.config.model_output)
-            encodings = model.encode(sess, input_data)
+            test_loss = model.evaluate(sess, test_set_raw)
+            print "Test loss:", test_loss
+        if args.markov_low_entropy:
+            mc_result_path = "mc_results" +"/{}_{}_{}".format(args.markov_n_order, args.markov_n_state, "low_entropy")
+        else:
+            mc_result_path = "mc_results" +"/{}_{}_{}".format(args.markov_n_order, args.markov_n_state, "high_entropy")    
+        if not os.path.exists(mc_result_path):
+            os.makedirs(mc_result_path)
 
-            print encodings
- 
+        mc_result_name = "/%s.txt" % model.config.model_path.split('/')[1]
+        result_path = mc_result_path + mc_result_name
+        with open(result_path, 'w') as result_file:
+            result_file.write("%f"%test_loss)   
 
-def do_train(args):
+def do_train(args, markov_config):
     config = Config(args)
     print "== Seq2Seq Config =="
     print "  Cell size:", config.cell_size
@@ -516,28 +581,41 @@ def do_train(args):
     print "  Gradient clipping:", config.clip_gradients
     print "  Feed decoder:", config.feed_decoder
 
+    print "== Markov Chain Config =="
+    print "Number of states:", markov_config.n_state
+    print "Markov chain order:", markov_config.n_order
+    print "Markov sequence length:", markov_config.seq_length
+    print "Markov transition probability:", markov_config.trans_prob
+    print "Markov entropy rate:", markov_config.entropy_rate
+
     # Create data
-    n_state = 2
-    n_order = 1
-    trans_prob = np.array([0.1,0.9])
-    trans_dict = mc.generate_trans_dict(n_state, n_order, trans_prob)
-    seq_length = 10
-    config.max_length = seq_length #Set max_length equal to seq_length of the data.
+    config.max_length = markov_config.seq_length #Set max_length equal to seq_length of the data.
     #training set
-    train_size = 1000
-    train_markov_seq, train_entropy_rate = mc.markov_seq(n_state, n_order, trans_dict, seq_length, train_size) #markov_seq: int np.array of (example_size, seq_length). entropy_rate is a float scalar.
+    train_size = 5000
+    np.random.seed(51)
+    train_markov_seq = mc.markov_seq(markov_config.n_state, markov_config.n_order, markov_config.trans_dict, markov_config.seq_length, train_size) #markov_seq: int np.array of (example_size, seq_length). entropy_rate is a float scalar.
+    print "transition dictionary:"
+    print markov_config.trans_dict   
+    print "train_set_samples:"
+    print train_markov_seq[:50]
     train_examples_raw = [train_markov_seq]*2 
     #dev set
-    dev_size = 1000
-    dev_markov_seq, dev_entropy_rate = mc.markov_seq(n_state, n_order, trans_dict, seq_length, dev_size) #markov_seq: int np.array of (example_size, seq_length). entropy_rate is a float scalar.
+    dev_size = 2500
+    np.random.seed(10)
+    dev_markov_seq = mc.markov_seq(markov_config.n_state, markov_config.n_order, markov_config.trans_dict, markov_config.seq_length, dev_size) #markov_seq: int np.array of (example_size, seq_length). entropy_rate is a float scalar.
+    print "dev_set_samples:"
+    print dev_markov_seq[:50]
     dev_set_raw = [dev_markov_seq]*2
     # Load pretrained embedding matrix
     # Embedding matrix has shape of (n_tokens, embed_size)
-    n_tokens = n_state + 1 # +1 in n_state + 1 is for "GO" token used in dec_input in add_prediction_op.
-    embed_size = 50
+    n_tokens = markov_config.n_state + 1 # +1 in n_state + 1 is for "GO" token used in dec_input in add_prediction_op.
+    embed_size = 1
+    np.random.seed(1)
     embeddings = np.float32(np.random.randn(n_tokens, embed_size)) #np.random.randn gives float64.
+    print embeddings
     #Create and train a seq2seq autoencoder
     with tf.Graph().as_default():
+	tf.set_random_seed(0)
         print "Building model..."
         model = Seq2seq_autoencoder(config, embeddings)
 
@@ -551,13 +629,6 @@ def do_train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Trains and tests an NER model')
     subparsers = parser.add_subparsers()
-
-    command_parser = subparsers.add_parser('test1', help='')
-    command_parser.add_argument('-d', '--data', default="test.txt")
-    command_parser.add_argument('-m', '--model-path')
-    command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
-    command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
-    command_parser.set_defaults(func=test_encoding)
 
     # Training
     command_parser = subparsers.add_parser('train', help='')
@@ -575,15 +646,49 @@ if __name__ == "__main__":
     command_parser.add_argument('-cg', '--clip-gradients',
             action="store_true",help="Enable gradient clipping.", default=False)
     command_parser.add_argument('-fd', '--feed-decoder', action="store_true", default=False)
+    command_parser.add_argument('-mks', '--markov-n-state', default=3, type=int, help="Number of Markov chain states.")
+    command_parser.add_argument('-mko', '--markov-n-order', default=1, type=int, help="Order of Markov chain.")
+    command_parser.add_argument('-mke', '--markov-low-entropy', action="store_true", default=False)
+    command_parser.set_defaults(func=do_train_and_test)
 
-    command_parser.set_defaults(func=do_train)
+    hp_setting = ['train', '-ct', 'rnn', '-cs', '50', '-ci', 'random', '-ac', 'tanh', '-cg', '-fd','-mks','5', '-mko', '2', '-mke']
 
-    hp_setting = ['train', '-ct', 'rnn', '-cs', '50', '-ci', 'random', '-ac', 'tanh', '-cg', '-fd']
+    CMD = ['train']
 
+    CTFLAG = ['-ct']
+    ct = ['rnn', 'gru', 'lstm']
 
-    ARGS = parser.parse_args(hp_setting)
-    if ARGS.func is None:
-        parser.print_help()
-        sys.exit(1)
-    else:
-        ARGS.func(ARGS)
+    CSFLAG = ['-cs']
+    cs = ['10', '30', '50', '70', '100']
+
+    CIFLAG = ['-ci']
+    ci = ['random']
+
+    ACFLAG = ['-ac']
+    ac = ['tanh']
+
+    FDFLAG = ['-fd']
+
+    MKSFLAG = ['-mks']
+    mks = ['3', '5']
+
+    MKOFLAG = ['-mko']
+    mko = ['1', '2']
+
+    MKEFLAG = ['-mke']
+    #Low-entropy true. feed-decoder true.
+    for args in product(CMD, CTFLAG, ct, CSFLAG, cs, CIFLAG, ci, ACFLAG, ac, FDFLAG, MKSFLAG, mks, MKOFLAG, mko, MKEFLAG, ['-cg']):
+        ARGS = parser.parse_args(args)
+        if ARGS.func is None:
+            parser.print_help()
+            sys.exit(1)
+        else:
+            ARGS.func(ARGS)
+    #Low-entropy false. feed-decoder true.
+    for args in product(CMD, CTFLAG, ct, CSFLAG, cs, CIFLAG, ci, ACFLAG, ac, FDFLAG, MKSFLAG, mks, MKOFLAG, mko, ['-cg']):
+        ARGS = parser.parse_args(args)
+        if ARGS.func is None:
+            parser.print_help()
+            sys.exit(1)
+        else:
+            ARGS.func(ARGS)
