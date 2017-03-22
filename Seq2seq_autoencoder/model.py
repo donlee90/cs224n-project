@@ -91,6 +91,20 @@ class Model(object):
         _, loss = sess.run([self.train_op, self.loss], feed_dict=feed)
         return loss
 
+    def loss_on_batch(self, sess, inputs_batch, labels_batch):
+        """Compute loss on the provided batch of data.
+
+        Args:
+            sess: tf.Session()
+            input_batch: np.ndarray of shape (n_samples, n_features)
+            labels_batch: np.ndarray of shape (n_samples, n_classes)
+        Returns:
+            loss: loss over the batch (a scalar)
+        """
+        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch)
+        loss = sess.run(self.loss, feed_dict=feed)
+        return loss
+
     def predict_on_batch(self, sess, inputs_batch):
         """Make predictions for the provided batch of data
 

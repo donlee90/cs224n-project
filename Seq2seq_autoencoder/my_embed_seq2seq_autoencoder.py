@@ -1,6 +1,8 @@
 import argparse
 from datetime import datetime
 from os.path import basename
+from itertools import product
+from os import listdir
 
 import tensorflow as tf
 import numpy as np
@@ -24,7 +26,7 @@ class Config(object):
     embed_size = 50
     batch_size = 20
     n_tokens = 7
-    n_epochs = 5000
+    n_epochs = 20
     lr = 1e-3
     cell_size = 200
     cell_type = "rnn" #This can be either "rnn", "gru", or "lstm". 
@@ -539,16 +541,50 @@ def do_train(args):
             sess.run(init)
             model.fit(sess, saver, train_examples_raw, dev_set_raw)
 
+def do_evaluate(args):
+    config = build_seq2seq_config(args)
+    helper = ModelHelper.load(args.model_path)
+    inputs_raw = load_data(args.data)
+
+    embeddings = load_embeddings(args, helper)
+    config.n_tokens = embeddings.shape[0]
+    config.embed_size = embeddings.shape[1]
+
+    with tf.Graph().as_default():
+        model = Seq2seq_autoencoder(helper, config, embeddings)
+        init = tf.global_variables_initializer()
+        saver = tf.train.Saver()
+        vectorized = model.helper.vectorize(inputs_raw)
+        inputs = model.preprocess_sequence_data(zip(vectorized,vectorized))
+
+        with tf.Session() as sess:
+            sess.run(init)
+            saver.restore(sess, model.config.model_output)
+            test_loss = model.evaluate(sess, inputs)
+
+    result_path = "ae_results/%s.txt" % args.model_path.split('/')[1]
+    with open(result_path, 'w') as result_file:
+        result_file.write("%f"%test_loss)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Trains and tests an NER model')
     subparsers = parser.add_subparsers()
 
+    # Test encoding
     command_parser = subparsers.add_parser('test1', help='')
     command_parser.add_argument('-d', '--data', default="test.txt")
     command_parser.add_argument('-m', '--model-path')
     command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
     command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
     command_parser.set_defaults(func=test_encoding)
+
+    # Evaluate model on test data
+    command_parser = subparsers.add_parser('evaluate', help='')
+    command_parser.add_argument('-d', '--data', default="data/test.txt")
+    command_parser.add_argument('-m', '--model-path')
+    command_parser.add_argument('-v', '--vocab', default="data/vocab.txt", help="Path to vocabulary file")
+    command_parser.add_argument('-vv', '--vectors', default="data/wordVectors.txt", help="Path to word vectors file")
+    command_parser.set_defaults(func=do_evaluate)
 
     # Training
     command_parser = subparsers.add_parser('train', help='')

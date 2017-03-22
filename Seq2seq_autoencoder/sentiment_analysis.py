@@ -26,14 +26,14 @@ def load_and_preprocess_data(args):
 
     # Process all the input data
     # Convert all the sentences into sequences of token ids
-    train_sents = load_data(args.data_train +"/sents.txt")
-    train_labels = load_labels(args.data_train +"/labels.txt")
+    train_sents = load_data(args.data_train +"/sents_trunc.txt")
+    train_labels = load_labels(args.data_train +"/labels_trunc.txt")
 
-    dev_sents = load_data(args.data_dev +"/sents.txt")
-    dev_labels = load_labels(args.data_dev +"/labels.txt")
+    dev_sents = load_data(args.data_dev +"/sents_trunc.txt")
+    dev_labels = load_labels(args.data_dev +"/labels_trunc.txt")
 
-    test_sents = load_data(args.data_test +"/sents.txt")
-    test_labels = load_labels(args.data_test +"/labels.txt")
+    test_sents = load_data(args.data_test +"/sents_trunc.txt")
+    test_labels = load_labels(args.data_test +"/labels_trunc.txt")
 
     print 'train size:', len(train_sents)
     print 'dev size:', len(dev_sents)
@@ -85,6 +85,9 @@ def do_train_and_test(args):
 
 
     print 'Finished encoding'
+    train = [train_encs, train_labels]
+    dev = [dev_encs, dev_labels]
+    test = [test_encs, test_labels]
 
     with tf.Graph().as_default():
         model = sf.SoftmaxModel(softmax_config)
@@ -92,7 +95,11 @@ def do_train_and_test(args):
 
         with tf.Session() as sess:
             sess.run(init)
-            model.fit(sess, train_encs, train_labels)
+            _, test_loss = model.fit(sess, train, dev, test)
+
+    result_path = "sa_results/%s.txt" % args.model_path.split('/')[1]
+    with open(result_path, 'w') as result_file:
+        result_file.write("%f"%test_loss)
             
 
 if __name__ == "__main__":

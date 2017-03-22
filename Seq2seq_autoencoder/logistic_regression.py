@@ -15,7 +15,7 @@ class LogisticConfig(object): #For my own benefit: (object) means that Config cl
     input_size = 100
     n_classes = 5
     batch_size = 64 #For my own benefit: batch_size really means mini_batch_size. The total number of training samples (which is sometimes called "batch_size" is n_samples above.)
-    n_epochs = 1000
+    n_epochs = 50
     lr = 1e-3
     label_max = 5 #label is a real continuous variable in [0,label_max].
 
@@ -138,7 +138,7 @@ class LogisticModel(Model): #For my own benefit: (Model) means SoftmaxModel clas
         ### END YOUR CODE
         return train_op
 
-    def run_epoch(self, sess, inputs, labels):
+    def run_epoch(self, sess, examples):
         """Runs an epoch of training.
 
         Args:
@@ -149,12 +149,19 @@ class LogisticModel(Model): #For my own benefit: (Model) means SoftmaxModel clas
             average_loss: scalar. Average minibatch loss of model on epoch.
         """
         n_minibatches, total_loss = 0, 0
-        for input_batch, labels_batch in get_minibatches([inputs, labels], self.config.batch_size): #For my own benefit: get_minibatches randomly selects as many as batch_size of the total training samples. This implements SGD.
+        for input_batch, labels_batch in get_minibatches(examples, self.config.batch_size): #For my own benefit: get_minibatches randomly selects as many as batch_size of the total training samples. This implements SGD.
             n_minibatches += 1
             total_loss += self.train_on_batch(sess, input_batch, labels_batch)
         return total_loss / n_minibatches
 
-    def fit(self, sess, inputs, labels):
+    def evaluate(self, sess, examples):
+        n_minibatches, total_loss = 0, 0
+        for input_batch, labels_batch in get_minibatches(examples, self.config.batch_size):
+            n_minibatches += 1
+            total_loss += self.loss_on_batch(sess, input_batch, labels_batch)
+        return total_loss / n_minibatches
+
+    def fit(self, sess, train, dev, test):
         """Fit model on provided data.
 
         Args:
@@ -164,14 +171,23 @@ class LogisticModel(Model): #For my own benefit: (Model) means SoftmaxModel clas
         Returns:
             losses: list of loss per epoch
         """
+        best_score = float('inf')
+        test_loss = float('inf')
         losses = []
         for epoch in range(self.config.n_epochs):
             start_time = time.time()
-            average_loss = self.run_epoch(sess, inputs, labels)
+            train_loss = self.run_epoch(sess, train)
+            dev_loss = self.evaluate(sess, dev)
             duration = time.time() - start_time
-            print 'Epoch {:}: loss = {:.2f} ({:.3f} sec)'.format(epoch, average_loss, duration)
-            losses.append(average_loss)
-        return losses
+            print 'Epoch {:}: train loss = {:.2f} dev_loss = {:.2f} ({:.3f} sec)'.format(epoch, train_loss, dev_loss, duration)
+            losses.append(train_loss)
+
+            if dev_loss < best_score:
+                best_score = dev_loss
+                print 'New best score! Evaluating on test set...'
+                test_loss = self.evaluate(sess, test)
+                print 'test loss = {:.2f}'.format(test_loss)
+        return losses, test_loss
 
     def __init__(self, config):
         """Initializes the model.
